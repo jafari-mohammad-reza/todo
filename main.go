@@ -2,11 +2,16 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
+	"strconv"
+	"syscall"
+	"time"
 )
 
 type Command string
@@ -18,11 +23,17 @@ const (
 	Failed  Status = "failed"
 )
 
+var statusMap = map[int]Status{
+	1: Done,
+	2: Pending,
+	3: Failed,
+}
+
 type Task struct {
 	Id          int
 	Title       string
 	Description string
-	DuDate      string
+	DuDate      time.Time
 	Status
 	*Category
 }
@@ -106,7 +117,6 @@ func (s *storage[T]) backupMemoryStorage() {
 		datas = append(datas, v)
 	}
 	data, err := json.Marshal(datas)
-	fmt.Println(data)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -117,16 +127,32 @@ var tasksStorage *storage[Task]
 var categoryStorage *storage[Category]
 
 func main() {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	signalChan := make(chan os.Signal, 1)
+	signal.Notify(signalChan, syscall.SIGINT, syscall.SIGTERM)
+
+	go func() {
+		<-signalChan
+		exit()
+		cancel()
+	}()
+
 	tasksStorage = newStorage[Task]("task", make(map[int]Task))
 	categoryStorage = newStorage[Category]("categories", make(map[int]Category))
+
 	command := flag.String("command", "exit", "command to enter")
 	flag.Parse()
+
+	scanner := bufio.NewScanner(os.Stdin)
 	for {
 		runCommand(Command(*command))
-		scanner := bufio.NewScanner(os.Stdin)
 		scanner.Scan()
 		*command = scanner.Text()
 	}
+
+	<-ctx.Done()
 }
 
 func runCommand(cmd Command) {
@@ -139,12 +165,7 @@ func runCommand(cmd Command) {
 		createCategory: CreateCategory,
 		updateCategory: UpdateCategory,
 		removeCategory: RemoveCategory,
-		Exit: func() {
-			fmt.Println("Bye!")
-			tasksStorage.backupMemoryStorage()
-			categoryStorage.backupMemoryStorage()
-			os.Exit(1)
-		},
+		Exit:           exit,
 	}
 	fCmd, ok := cmdMap[cmd]
 	if ok {
@@ -152,6 +173,12 @@ func runCommand(cmd Command) {
 		return
 	}
 	fmt.Println("unknown command")
+}
+func exit() {
+	fmt.Println("Bye!")
+	tasksStorage.backupMemoryStorage()
+	categoryStorage.backupMemoryStorage()
+	os.Exit(1)
 }
 func ListTasks() {
 	tasks := tasksStorage.memoryStorage
@@ -173,11 +200,14 @@ func CreateTask() {
 	fmt.Println("Insert task description:")
 	task.Description = scanner.scanInput("description", true, 3)
 	fmt.Println("Insert duDate:")
-	task.DuDate = scanner.scanInput("duDate", true, 3)
-	fmt.Println("Insert status:")
-	task.Status = Status(scanner.scanInput("status", true, 3))
-	fmt.Println("Insert category:")
-	task.Category = GetCategory(scanner.scanInput("category", true, 3))
+	task.DuDate, _ = time.Parse("2006-01-02", scanner.scanInput("duDate", true, 3))
+	fmt.Printf("Insert status:\nOptions:\n1)Done\n2)Failed\n3)Pending\n")
+	st, _ := strconv.Atoi(scanner.scanInput("status", true, 3))
+	task.Status = statusMap[st]
+	fmt.Println("Insert category:\nOptions:")
+	ListCategory()
+	categoryId, _ := strconv.Atoi(scanner.scanInput("categoryId", true, 3))
+	task.Category = GetCategory(categoryId - 1)
 	tasksStorage.AddMemoryItem(task.Id, task)
 	fmt.Printf("Task created successfully.\n")
 	ListTasks()
@@ -186,7 +216,8 @@ func UpdateTask() {}
 func RemoveTask() {}
 func ListCategory() {
 	for c := range categoryStorage.memoryStorage {
-		fmt.Printf("\n%+v\n", categoryStorage.memoryStorage[c])
+		category := categoryStorage.memoryStorage[c]
+		fmt.Printf("\n%d)%s\n", category.Id, category.Title)
 	}
 }
 func CreateCategory() {
@@ -206,7 +237,7 @@ func CreateCategory() {
 }
 func UpdateCategory() {}
 func RemoveCategory() {}
-func GetCategory(title string) *Category {
+func GetCategoryByTitle(title string) *Category {
 	var category Category
 	for c := range categoryStorage.memoryStorage {
 		if categoryStorage.memoryStorage[c].Title == title {
@@ -215,6 +246,10 @@ func GetCategory(title string) *Category {
 		}
 	}
 	return nil
+}
+func GetCategory(id int) *Category {
+	c := categoryStorage.memoryStorage[id]
+	return &c
 }
 func (c *customerScanner) scanInput(title string, required bool, maxTry int) string {
 	// maxTry -1 means infinite loop
