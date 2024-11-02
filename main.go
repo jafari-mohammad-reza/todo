@@ -112,7 +112,10 @@ func (s *storage[T]) loadMemoryStorage() {
 	}
 }
 func (s *storage[T]) backupMemoryStorage() {
-	config, _ := os.UserConfigDir()
+	config, err := os.UserConfigDir()
+	if err != nil {
+		log.Fatal(err)
+	}
 	dataFile := fmt.Sprintf("%s/todo/%s.json", config, s.name)
 	var datas []T
 	for _, v := range s.memoryStorage {
@@ -123,6 +126,9 @@ func (s *storage[T]) backupMemoryStorage() {
 		log.Fatal(err)
 	}
 	err = os.WriteFile(dataFile, data, 0644)
+	if err != nil {
+		log.Fatal(err)
+	}
 }
 
 var tasksStorage *storage[Task]
@@ -133,7 +139,7 @@ func main() {
 	defer cancel()
 
 	signalChan := make(chan os.Signal, 1)
-	signal.Notify(signalChan, syscall.SIGINT, syscall.SIGTERM)
+	signal.Notify(signalChan, syscall.SIGINT, syscall.SIGTERM) // listen for sigterm to execute exit() method and backup all memory data.
 
 	go func() {
 		<-signalChan
@@ -222,18 +228,22 @@ func UpdateTask() {
 	}
 	Id, _ := strconv.Atoi(id)
 	task := tasksStorage.memoryStorage[Id-1]
-	task.Title = strings.Trim(readWithDefaultVal("Title", task.Title), " ")
+	if task.Id-1 != Id {
+		fmt.Println("task does not exist.")
+		return
+	}
+	task.Title = strings.Trim(readWithDefaultVal("Title", task.Title, true), " ")
 	fmt.Printf("Title: %s\n", task.Title)
-	task.Description = strings.Trim(readWithDefaultVal("Description", task.Description), " ")
+	task.Description = strings.Trim(readWithDefaultVal("Description", task.Description, true), " ")
 	fmt.Printf("Description: %s\n", task.Description)
-	task.Status = Status(readWithDefaultVal("Status", string(task.Status)))
+	task.Status = Status(readWithDefaultVal("Status", string(task.Status), true))
 	fmt.Printf("Status: %v\n", task.Status)
 	tasksStorage.memoryStorage[task.Id] = task
 	fmt.Println("Task updated successfully.")
 	ListTasks()
 }
 
-func readWithDefaultVal(fieldName string, defaultText string) string {
+func readWithDefaultVal(fieldName string, defaultText string, required bool) string {
 	initialState, _ := term.GetState(int(os.Stdin.Fd()))
 	defer term.Restore(int(os.Stdin.Fd()), initialState)
 	term.MakeRaw(int(os.Stdin.Fd()))
@@ -255,6 +265,10 @@ func readWithDefaultVal(fieldName string, defaultText string) string {
 			fmt.Print("\033[1A")                 // Move cursor up one line
 			fmt.Printf("\033[%dD", promptLength) // Move cursor back to the start of the prompt
 			fmt.Print("\033[K")                  // Clear the line
+			if required && string(lineBuffer) == "" {
+				fmt.Printf("%s can not be empty.", fieldName)
+				readWithDefaultVal(fieldName, defaultText, required)
+			}
 			return string(lineBuffer)
 		case 127: // Backspace
 			if len(lineBuffer) > 0 {
@@ -302,7 +316,28 @@ func CreateCategory() {
 	fmt.Printf("Category created successfully.\n")
 	ListCategory()
 }
-func UpdateCategory() {}
+func UpdateCategory() {
+	scanner := newCustomerScanner()
+	var id string
+	if len(os.Args) == 3 && os.Args[2] != "" {
+		id = os.Args[2]
+		os.Args[2] = ""
+	} else {
+		fmt.Println("Insert category Id:")
+		id = scanner.scanInput("Id", true, -1)
+	}
+	Id, _ := strconv.Atoi(id)
+	category := categoryStorage.memoryStorage[Id-1]
+	if category.Id-1 != Id {
+		fmt.Println("category does not exist.")
+		return
+	}
+	category.Title = strings.Trim(readWithDefaultVal("Title", category.Title, true), " ")
+	fmt.Printf("Title: %s\n", category.Title)
+	categoryStorage.memoryStorage[category.Id] = category
+	fmt.Println("category updated successfully.")
+	ListCategory()
+}
 func RemoveCategory() {
 	var id string
 	if len(os.Args) == 3 && os.Args[2] != "" {
