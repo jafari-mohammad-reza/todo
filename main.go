@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"golang.org/x/term"
 	"log"
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -35,7 +37,7 @@ type Task struct {
 	Description string
 	DuDate      time.Time
 	Status
-	*Category
+	CategoryId int
 }
 
 type Category struct {
@@ -184,11 +186,7 @@ func ListTasks() {
 	tasks := tasksStorage.memoryStorage
 	for t := range tasks {
 		task := tasks[t]
-		category := "unknown"
-		if task.Category != nil {
-			category = task.Category.Title
-		}
-		fmt.Printf(" title : %s\n descritpion : %s\n status : %s\n du date : %s\n category : %s\n", task.Title, task.Description, task.Status, task.DuDate, category)
+		fmt.Printf("\n title : %s\n descritpion : %s\n status : %s\n du date : %s\n category : %s\n", task.Title, task.Description, task.Status, task.DuDate, GetCategory(task.CategoryId).Title)
 	}
 }
 func CreateTask() {
@@ -207,13 +205,82 @@ func CreateTask() {
 	fmt.Println("Insert category:\nOptions:")
 	ListCategory()
 	categoryId, _ := strconv.Atoi(scanner.scanInput("categoryId", true, 3))
-	task.Category = GetCategory(categoryId - 1)
+	task.CategoryId = categoryId - 1
 	tasksStorage.AddMemoryItem(task.Id, task)
 	fmt.Printf("Task created successfully.\n")
 	ListTasks()
 }
-func UpdateTask() {}
-func RemoveTask() {}
+func UpdateTask() {
+	scanner := newCustomerScanner()
+	var id string
+	if len(os.Args) == 3 && os.Args[2] != "" {
+		id = os.Args[2]
+		os.Args[2] = ""
+	} else {
+		fmt.Println("Insert task Id:")
+		id = scanner.scanInput("Id", true, -1)
+	}
+	Id, _ := strconv.Atoi(id)
+	task := tasksStorage.memoryStorage[Id-1]
+	task.Title = strings.Trim(readWithDefaultVal("Title", task.Title), " ")
+	fmt.Printf("Title: %s\n", task.Title)
+	task.Description = strings.Trim(readWithDefaultVal("Description", task.Description), " ")
+	fmt.Printf("Description: %s\n", task.Description)
+	task.Status = Status(readWithDefaultVal("Status", string(task.Status)))
+	fmt.Printf("Status: %v\n", task.Status)
+	tasksStorage.memoryStorage[task.Id] = task
+	fmt.Println("Task updated successfully.")
+	ListTasks()
+}
+
+func readWithDefaultVal(fieldName string, defaultText string) string {
+	initialState, _ := term.GetState(int(os.Stdin.Fd()))
+	defer term.Restore(int(os.Stdin.Fd()), initialState)
+	term.MakeRaw(int(os.Stdin.Fd()))
+
+	lineBuffer := []rune(defaultText)
+	fmt.Printf("%s: %s", fieldName, defaultText)
+	promptLength := len(fieldName) + 2 + len(defaultText)
+
+	for {
+		buf := make([]byte, 1)
+		_, _ = os.Stdin.Read(buf)
+
+		switch buf[0] {
+		case 3: // Ctrl+C
+			term.Restore(int(os.Stdin.Fd()), initialState)
+			os.Exit(1)
+		case 13: // Enter key
+			fmt.Print("\n")
+			fmt.Print("\033[1A")                 // Move cursor up one line
+			fmt.Printf("\033[%dD", promptLength) // Move cursor back to the start of the prompt
+			fmt.Print("\033[K")                  // Clear the line
+			return string(lineBuffer)
+		case 127: // Backspace
+			if len(lineBuffer) > 0 {
+				lineBuffer = lineBuffer[:len(lineBuffer)-1]
+				fmt.Print("\b \b") // Move back, clear character, move back again
+			}
+		default:
+			lineBuffer = append(lineBuffer, rune(buf[0]))
+			fmt.Print(string(buf))
+		}
+	}
+}
+
+func RemoveTask() {
+	var id string
+	if len(os.Args) == 3 && os.Args[2] != "" {
+		id = os.Args[2]
+		os.Args[2] = ""
+	} else {
+		scanner := newCustomerScanner()
+		fmt.Println("Insert task Id:")
+		id = scanner.scanInput("Id", true, -1)
+	}
+	Id, _ := strconv.Atoi(id)
+	tasksStorage.RemoveMemoryItem(Id)
+}
 func ListCategory() {
 	for c := range categoryStorage.memoryStorage {
 		category := categoryStorage.memoryStorage[c]
@@ -221,13 +288,13 @@ func ListCategory() {
 	}
 }
 func CreateCategory() {
-	scanner := newCustomerScanner()
 	category := Category{}
 	category.Id = len(categoryStorage.memoryStorage) + 1
 	if len(os.Args) == 3 && os.Args[2] != "" {
 		category.Title = os.Args[2]
 		os.Args[2] = ""
 	} else {
+		scanner := newCustomerScanner()
 		fmt.Println("Insert category title:")
 		category.Title = scanner.scanInput("title", true, -1)
 	}
@@ -236,7 +303,19 @@ func CreateCategory() {
 	ListCategory()
 }
 func UpdateCategory() {}
-func RemoveCategory() {}
+func RemoveCategory() {
+	var id string
+	if len(os.Args) == 3 && os.Args[2] != "" {
+		id = os.Args[2]
+		os.Args[2] = ""
+	} else {
+		scanner := newCustomerScanner()
+		fmt.Println("Insert category Id:")
+		id = scanner.scanInput("Id", true, -1)
+	}
+	Id, _ := strconv.Atoi(id)
+	categoryStorage.RemoveMemoryItem(Id)
+}
 func GetCategoryByTitle(title string) *Category {
 	var category Category
 	for c := range categoryStorage.memoryStorage {
@@ -247,9 +326,11 @@ func GetCategoryByTitle(title string) *Category {
 	}
 	return nil
 }
-func GetCategory(id int) *Category {
-	c := categoryStorage.memoryStorage[id]
-	return &c
+func GetCategory(id int) Category {
+	if len(categoryStorage.memoryStorage) < id+1 {
+		log.Fatalf("%d is invalid category", id)
+	}
+	return categoryStorage.memoryStorage[id]
 }
 func (c *customerScanner) scanInput(title string, required bool, maxTry int) string {
 	// maxTry -1 means infinite loop
