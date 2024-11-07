@@ -8,8 +8,8 @@ import (
 )
 
 type Storage[T any] interface {
-	SaveItem(id int, item T)
-	RemoveItem(id int)
+	SaveItem(id int, item T) error
+	RemoveItem(id int) error
 	GetItem(id int) (*T, error)
 	GetItems() []T
 	Close() error
@@ -77,12 +77,14 @@ func (s *MemoryStorage[T]) Close() error {
 	return s.backupMemoryStorage()
 }
 
-func (s *MemoryStorage[T]) SaveItem(id int, item T) {
+func (s *MemoryStorage[T]) SaveItem(id int, item T) error {
 	s.data[id] = item
+	return nil
 }
 
-func (s *MemoryStorage[T]) RemoveItem(id int) {
+func (s *MemoryStorage[T]) RemoveItem(id int) error {
 	delete(s.data, id)
+	return nil
 }
 func (s *MemoryStorage[T]) GetItem(id int) (*T, error) {
 	item, exist := s.data[id]

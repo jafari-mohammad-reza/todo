@@ -13,37 +13,10 @@ import (
 	"strings"
 	"syscall"
 	"time"
-	"todo-cli/storage"
+	"todo-cli/models"
 )
 
 type Command string
-type Status string
-
-const (
-	Done    Status = "done"
-	Pending Status = "pending"
-	Failed  Status = "failed"
-)
-
-var statusMap = map[int]Status{
-	1: Done,
-	2: Pending,
-	3: Failed,
-}
-
-type Task struct {
-	Id          int
-	Title       string
-	Description string
-	DuDate      time.Time
-	Status
-	CategoryId int
-}
-
-type Category struct {
-	Id    int
-	Title string
-}
 
 const (
 	createTask     Command = "create-task"
@@ -67,10 +40,12 @@ func newCustomerScanner() *customerScanner {
 	}
 }
 
-var tasksStorage storage.Storage[Task]
-var categoryStorage storage.Storage[Category]
+var taskRepository models.Repository[models.Task]
+var categoryRepository models.Repository[models.Category]
 
 func RunCli() {
+	taskRepository = models.NewTaskRepository()
+	categoryRepository = models.NewCategoryRepository()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -83,8 +58,6 @@ func RunCli() {
 		cancel()
 	}()
 
-	tasksStorage = storage.NewMemoryStorage[Task]("tasks")
-	categoryStorage = storage.NewMemoryStorage[Category]("categories")
 	os.Args[1] = os.Args[2] // to replace "cli" in beginning
 	command := flag.String("command", "exit", "command to enter")
 	flag.Parse()
@@ -120,20 +93,19 @@ func runCommand(cmd Command) {
 }
 func exit() {
 	fmt.Println("Bye!")
-	tasksStorage.Close()
-	categoryStorage.Close()
+	taskRepository.CloseStorage()
+	categoryRepository.CloseStorage()
 	os.Exit(1)
 }
 func ListTasks() {
-	tasks := tasksStorage.GetItems()
+	tasks := taskRepository.List()
 	for t := range tasks {
 		task := tasks[t]
 		fmt.Printf("\n title : %s\n descritpion : %s\n status : %s\n du date : %s\n category : %s\n", task.Title, task.Description, task.Status, task.DuDate, GetCategory(task.CategoryId).Title)
 	}
 }
 func CreateTask() {
-	task := Task{}
-	task.Id = len(tasksStorage.GetItems()) + 1
+	task := models.Task{}
 	scanner := newCustomerScanner()
 	fmt.Println("Insert task title:")
 	task.Title = scanner.scanInput("title", true, 3)
@@ -143,12 +115,12 @@ func CreateTask() {
 	task.DuDate, _ = time.Parse("2006-01-02", scanner.scanInput("duDate", true, 3))
 	fmt.Printf("Insert status:\nOptions:\n1)Done\n2)Failed\n3)Pending\n")
 	st, _ := strconv.Atoi(scanner.scanInput("status", true, 3))
-	task.Status = statusMap[st]
+	task.Status = models.StatusMap[st]
 	fmt.Println("Insert category:\nOptions:")
 	ListCategory()
 	categoryId, _ := strconv.Atoi(scanner.scanInput("categoryId", true, 3))
 	task.CategoryId = categoryId - 1
-	tasksStorage.SaveItem(task.Id, task)
+	taskRepository.Save(task)
 	fmt.Printf("Task created successfully.\n")
 	ListTasks()
 }
@@ -163,7 +135,7 @@ func UpdateTask() {
 		id = scanner.scanInput("Id", true, -1)
 	}
 	Id, _ := strconv.Atoi(id)
-	task, err := tasksStorage.GetItem(Id - 1)
+	task, err := taskRepository.Get(Id - 1)
 	if err != nil {
 		fmt.Println(err.Error())
 		return
@@ -172,9 +144,9 @@ func UpdateTask() {
 	fmt.Printf("Title: %s\n", task.Title)
 	task.Description = strings.Trim(readWithDefaultVal("Description", task.Description, true), " ")
 	fmt.Printf("Description: %s\n", task.Description)
-	task.Status = Status(readWithDefaultVal("Status", string(task.Status), true))
+	task.Status = models.Status(readWithDefaultVal("Status", string(task.Status), true))
 	fmt.Printf("Status: %v\n", task.Status)
-	tasksStorage.SaveItem(task.Id, *task)
+	taskRepository.Save(*task)
 	fmt.Println("Task updated successfully.")
 	ListTasks()
 }
@@ -229,16 +201,15 @@ func RemoveTask() {
 		id = scanner.scanInput("Id", true, -1)
 	}
 	Id, _ := strconv.Atoi(id)
-	tasksStorage.RemoveItem(Id)
+	taskRepository.Delete(Id)
 }
 func ListCategory() {
-	for _, c := range categoryStorage.GetItems() {
+	for _, c := range categoryRepository.List() {
 		fmt.Printf("\n%d)%s\n", c.Id, c.Title)
 	}
 }
 func CreateCategory() {
-	category := Category{}
-	category.Id = len(categoryStorage.GetItems()) + 1
+	category := models.Category{}
 	if len(os.Args) == 4 && os.Args[3] != "" {
 		category.Title = os.Args[3]
 		os.Args[3] = ""
@@ -247,7 +218,7 @@ func CreateCategory() {
 		fmt.Println("Insert category title:")
 		category.Title = scanner.scanInput("title", true, -1)
 	}
-	categoryStorage.SaveItem(category.Id, category)
+	categoryRepository.Save(category)
 	fmt.Printf("Category created successfully.\n")
 	ListCategory()
 }
@@ -262,14 +233,14 @@ func UpdateCategory() {
 		id = scanner.scanInput("Id", true, -1)
 	}
 	Id, _ := strconv.Atoi(id)
-	category, err := categoryStorage.GetItem(Id - 1)
+	category, err := categoryRepository.Get(Id - 1)
 	if err != nil {
 		fmt.Println(err.Error())
 		return
 	}
 	category.Title = strings.Trim(readWithDefaultVal("Title", category.Title, true), " ")
 	fmt.Printf("Title: %s\n", category.Title)
-	categoryStorage.SaveItem(category.Id, *category)
+	categoryRepository.Save(*category)
 	fmt.Println("category updated successfully.")
 	ListCategory()
 }
@@ -284,11 +255,11 @@ func RemoveCategory() {
 		id = scanner.scanInput("Id", true, -1)
 	}
 	Id, _ := strconv.Atoi(id)
-	categoryStorage.RemoveItem(Id)
+	categoryRepository.Delete(Id)
 }
 
-func GetCategory(id int) Category {
-	category, err := categoryStorage.GetItem(id)
+func GetCategory(id int) models.Category {
+	category, err := categoryRepository.Get(id)
 	if err != nil {
 		log.Fatal(err.Error())
 	}
